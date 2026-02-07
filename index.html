@@ -14,42 +14,54 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // CONFIGURAÇÃO DE SEGURANÇA PARA O RENDER
-        // Se as variáveis de ambiente não existirem (como no Render), o código não quebrará.
+        // --- CONFIGURAÇÃO MANUAL (APLICADA COM SUAS CHAVES) ---
+        const manualConfig = {
+            apiKey: "AIzaSyBbxLpUZ0hh9BOVjDJ8USR3GleAdsN3xKk",
+            authDomain: "nexocloud-62fc1.firebaseapp.com",
+            projectId: "nexocloud-62fc1",
+            storageBucket: "nexocloud-62fc1.firebasestorage.app",
+            messagingSenderId: "656181101189",
+            appId: "1:656181101189:web:cb3a75dc7d8ef48bff5fec",
+            measurementId: "G-T2J3H7KRQP"
+        };
+
         let firebaseConfig = {};
         try {
-            if (typeof __firebase_config !== 'undefined') {
+            // Prioriza variáveis do ambiente (Gemini), se não existirem, usa suas chaves manuais (Render)
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
                 firebaseConfig = JSON.parse(__firebase_config);
             } else {
-                // Aqui você poderia colocar suas chaves manuais do Firebase se quisesse usar um projeto próprio fora do Gemini
-                console.warn("Configurações do Firebase não encontradas. Verifique as variáveis de ambiente.");
+                firebaseConfig = manualConfig;
             }
         } catch (e) {
-            console.error("Erro ao carregar config:", e);
+            firebaseConfig = manualConfig;
         }
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexo-game-default';
         
-        // Inicialização protegida
         let app_firebase, auth, db;
-        if (firebaseConfig.apiKey) {
-            app_firebase = initializeApp(firebaseConfig);
-            auth = getAuth(app_firebase);
-            db = getFirestore(app_firebase);
-        }
-
-        // Referências
-        const getPublicCollection = () => collection(db, 'artifacts', appId, 'public', 'data', 'users');
-        const getUserDoc = (sunId) => doc(db, 'artifacts', appId, 'public', 'data', 'users', sunId);
-
-        // Estado Global
+        
         window.state = {
             currentUser: null,
             allUsers: [],
-            dbReady: false
+            dbReady: false,
+            initError: false
         };
 
-        // --- AUTH & LOAD ---
+        if (firebaseConfig.apiKey) {
+            try {
+                app_firebase = initializeApp(firebaseConfig);
+                auth = getAuth(app_firebase);
+                db = getFirestore(app_firebase);
+            } catch(e) {
+                window.state.initError = true;
+            }
+        }
+
+        // Caminhos seguindo a regra obrigatória de caminhos públicos
+        const getPublicCollection = () => collection(db, 'artifacts', appId, 'public', 'data', 'users');
+        const getUserDoc = (sunId) => doc(db, 'artifacts', appId, 'public', 'data', 'users', sunId);
+
         async function initSystem() {
             if (!auth) return;
             try {
@@ -60,8 +72,6 @@
                 }
             } catch (error) { 
                 console.error("Auth Error:", error);
-                // Fallback para persistência local se a nuvem falhar no Render sem config
-                window.state.dbReady = false;
             }
         }
 
@@ -76,6 +86,7 @@
 
         function startRealtimeListener() {
             if (!db) return;
+            // Listener simples sem filtros complexos (Regra 2)
             onSnapshot(getPublicCollection(), (snapshot) => {
                 const users = [];
                 snapshot.forEach(doc => users.push(doc.data()));
@@ -94,16 +105,11 @@
                         updateNavUI(myUser);
                     }
                 }
-            }, (error) => {
-                console.error("Erro no listener Firestore:", error);
-            });
+            }, (err) => console.error("Firestore Error:", err));
         }
 
-        // API EXPOSTA
         window.apiRegister = async (email, pass, nick) => {
-            if (!window.state.dbReady) {
-                throw new Error("O servidor de banco de dados não está respondendo. Verifique a conexão.");
-            }
+            if (!window.state.dbReady) throw new Error("Aguardando conexão com o banco...");
             
             if (window.state.allUsers.find(u => u.email === email)) throw new Error("E-mail já cadastrado.");
             if (window.state.allUsers.find(u => u.nick === nick)) throw new Error("Nickname em uso.");
@@ -137,7 +143,7 @@
                 window.state.currentUser = found;
                 return { success: true, user: found };
             }
-            return { success: false, msg: "Credenciais inválidas." };
+            return { success: false, msg: "Dados incorretos." };
         };
 
         window.apiUpdateUser = async (sunId, newData) => {
@@ -152,7 +158,6 @@
     </script>
 
     <script>
-        // Configuração do Tailwind
         tailwind.config = {
             theme: {
                 extend: {
@@ -162,7 +167,6 @@
             }
         }
 
-        // Funções de UI
         function router(viewName) {
             document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden-view'));
             const user = window.state.currentUser;
@@ -170,7 +174,7 @@
             if (viewName === 'dashboard' && !user) return router('login');
             if (viewName === 'admin') {
                 if (!user || (!user.nick.startsWith('[San]') && user.role !== 'admin')) {
-                    alert("Área restrita [San].");
+                    alert("Acesso restrito.");
                     return router('home');
                 }
                 window.renderAdminTable();
@@ -218,22 +222,19 @@
             if (step === 2) {
                 const email = document.getElementById('reg-email').value;
                 const pass = document.getElementById('reg-pass').value;
-                if (!email.includes('@') || pass.length < 4) return alert("E-mail ou senha muito curta.");
+                if (!email.includes('@') || pass.length < 4) return alert("E-mail inválido ou senha curta.");
                 regData.email = email; regData.pass = pass;
             }
             if (step === 3) {
                 const nick = document.getElementById('reg-nick').value;
-                if (nick.length < 3) return alert("Nick muito curto.");
-                if (nick.toLowerCase().startsWith('[san]')) return alert("Prefixo [San] reservado.");
+                if (nick.length < 3) return alert("Nick curto.");
+                if (nick.toLowerCase().startsWith('[san]')) return alert("Prefixo reservado.");
                 regData.nick = nick;
                 finishRegister();
                 return;
             }
             document.querySelectorAll('.reg-step').forEach(el => el.classList.add('hidden-view'));
             document.getElementById(`reg-step-${step}`).classList.remove('hidden-view');
-            for(let i=1; i<=3; i++) {
-                document.getElementById(`step-dot-${i}`).className = i <= step ? 'text-nexo-main' : 'text-slate-600';
-            }
         }
 
         async function finishRegister() {
@@ -241,7 +242,7 @@
             document.getElementById('reg-step-loading').classList.remove('hidden-view');
             try {
                 await window.apiRegister(regData.email, regData.pass, regData.nick);
-                setTimeout(() => { alert("Sucesso! Conta sincronizada."); router('dashboard'); }, 1000);
+                setTimeout(() => { router('dashboard'); }, 500);
             } catch (e) {
                 alert(e.message);
                 regNext(1);
@@ -253,8 +254,6 @@
             const pass = document.getElementById('login-pass').value;
             const res = await window.apiLogin(id, pass, id.includes('@') ? 'email' : 'code');
             if (res.success) {
-                updateNavUI(res.user);
-                updateDashboardUI(res.user);
                 router(res.user.role === 'admin' || res.user.nick.startsWith('[San]') ? 'admin' : 'dashboard');
             } else {
                 document.getElementById('login-error').textContent = res.msg;
@@ -265,18 +264,16 @@
             const tbody = document.getElementById('admin-table-body');
             tbody.innerHTML = window.state.allUsers.map(u => `
                 <tr class="border-b border-slate-800 hover:bg-slate-800/50">
-                    <td class="p-3 font-mono text-xs text-nexo-main">${u.sunId}</td>
-                    <td class="p-3 font-bold">${u.nick}</td>
-                    <td class="p-3 text-slate-400">${u.email}</td>
-                    <td class="p-3 text-xs">${atob(u.pass)}</td>
-                    <td class="p-3 uppercase text-[10px]">${u.role}</td>
-                    <td class="p-3 flex gap-2">
+                    <td class="p-4 font-mono text-xs text-nexo-main">${u.sunId}</td>
+                    <td class="p-4 font-bold">${u.nick}</td>
+                    <td class="p-4 text-slate-400">${u.email}</td>
+                    <td class="p-4 uppercase text-[10px]">${u.role}</td>
+                    <td class="p-4 flex gap-3">
                         <button onclick="openEditModal('${u.sunId}')" class="text-blue-400 hover:text-white"><i class="fa-solid fa-pen"></i></button>
                         <button onclick="deleteUser('${u.sunId}')" class="text-red-400 hover:text-white"><i class="fa-solid fa-trash"></i></button>
                     </td>
                 </tr>
             `).join('');
-            document.getElementById('admin-count').textContent = window.state.allUsers.length;
         }
 
         window.openEditModal = (sunId) => {
@@ -285,7 +282,6 @@
             document.getElementById('edit-sunid').value = user.sunId;
             document.getElementById('edit-nick').value = user.nick;
             document.getElementById('edit-email').value = user.email;
-            document.getElementById('edit-pass').value = atob(user.pass);
             document.getElementById('edit-role').value = user.role;
             document.getElementById('modal-edit').classList.remove('hidden-view');
         }
@@ -295,19 +291,16 @@
             await window.apiUpdateUser(sunId, {
                 nick: document.getElementById('edit-nick').value,
                 email: document.getElementById('edit-email').value,
-                pass: btoa(document.getElementById('edit-pass').value),
                 role: document.getElementById('edit-role').value
             });
             document.getElementById('modal-edit').classList.add('hidden-view');
-            alert("Sincronizado!");
         }
 
         window.deleteUser = async (sunId) => {
-            if(confirm("Excluir conta permanentemente?")) await window.apiDeleteUser(sunId);
+            if(confirm("Deseja realmente excluir este jogador?")) await window.apiDeleteUser(sunId);
         }
 
-        // Init
-        window.onload = () => { updateNavUI(null); router('home'); };
+        window.onload = () => { router('home'); };
     </script>
 
     <style>
@@ -322,10 +315,10 @@
 </head>
 <body class="min-h-screen flex flex-col">
 
-    <nav class="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-50">
+    <nav class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 p-4 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto flex justify-between items-center">
-            <div class="flex items-center gap-2 cursor-pointer" onclick="router('home')">
-                <i class="fa-solid fa-sun text-nexo-main text-2xl"></i>
+            <div class="flex items-center gap-2 cursor-pointer group" onclick="router('home')">
+                <i class="fa-solid fa-sun text-nexo-main text-2xl group-hover:rotate-90 transition-transform duration-500"></i>
                 <h1 class="text-2xl font-display font-bold tracking-widest">NEXO</h1>
             </div>
             <div id="nav-links"></div>
@@ -335,72 +328,77 @@
     <main class="flex-grow">
         <!-- HOME -->
         <section id="view-home" class="view-section hero-bg min-h-[85vh] flex flex-col items-center justify-center text-center px-4">
-            <h2 class="text-6xl md:text-8xl font-display font-black mb-6">NEXO <span class="text-nexo-main">CLOUD</span></h2>
-            <p class="text-slate-400 max-w-xl mb-10 text-lg">O Battle Royale com persistência real de dados. Crie sua conta e entre para a elite.</p>
+            <div class="animate-pulse mb-4 text-nexo-main font-bold tracking-tighter text-sm">PROJETO NEXOCLOUD ATIVO</div>
+            <h2 class="text-6xl md:text-8xl font-display font-black mb-6">NEXO <span class="text-nexo-main">ULTIMATE</span></h2>
+            <p class="text-slate-400 max-w-xl mb-10 text-lg">Seu progresso sincronizado em tempo real com o Google Firestore.</p>
             <div class="flex gap-4">
-                <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-8 py-4 font-bold rounded hover:scale-105 transition">CRIAR CONTA AGORA</button>
+                <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-8 py-4 font-bold rounded hover:scale-105 transition shadow-lg shadow-amber-500/20">CRIAR CONTA GLOBAL</button>
             </div>
         </section>
 
         <!-- REGISTER -->
         <section id="view-register" class="view-section hidden-view min-h-screen flex items-center justify-center p-4">
-            <div class="glass-panel p-8 rounded-xl w-full max-w-md">
-                <div class="flex justify-center gap-2 mb-8">
-                    <div id="step-dot-1" class="text-nexo-main text-[8px]"><i class="fa-solid fa-circle"></i></div>
-                    <div id="step-dot-2" class="text-slate-600 text-[8px]"><i class="fa-solid fa-circle"></i></div>
-                    <div id="step-dot-3" class="text-slate-600 text-[8px]"><i class="fa-solid fa-circle"></i></div>
-                </div>
-
+            <div class="glass-panel p-8 rounded-xl w-full max-w-md border-t-4 border-t-nexo-main">
                 <div id="reg-step-1" class="reg-step">
-                    <h3 class="text-xl font-display mb-6">CREDENCIAIS</h3>
-                    <input type="email" id="reg-email" placeholder="E-mail" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-4 outline-none focus:border-nexo-main">
-                    <input type="password" id="reg-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-6 outline-none focus:border-nexo-main">
-                    <button onclick="regNext(2)" class="w-full bg-nexo-main text-slate-900 font-bold py-3 rounded">PRÓXIMO</button>
+                    <h3 class="text-xl font-display font-bold mb-6">ETAPA 1: ACESSO</h3>
+                    <div class="space-y-4">
+                        <input type="email" id="reg-email" placeholder="E-mail" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main transition">
+                        <input type="password" id="reg-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main transition">
+                        <button onclick="regNext(2)" class="w-full bg-nexo-main text-slate-900 font-bold py-4 rounded hover:bg-white transition">PRÓXIMO</button>
+                    </div>
                 </div>
 
                 <div id="reg-step-2" class="reg-step hidden-view">
-                    <h3 class="text-xl font-display mb-6">IDENTIDADE</h3>
-                    <input type="text" id="reg-nick" placeholder="Nickname" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-6 outline-none focus:border-nexo-main">
-                    <button onclick="regNext(3)" class="w-full bg-nexo-main text-slate-900 font-bold py-3 rounded">FINALIZAR</button>
+                    <h3 class="text-xl font-display font-bold mb-6">ETAPA 2: IDENTIDADE</h3>
+                    <div class="space-y-4">
+                        <input type="text" id="reg-nick" placeholder="Nickname" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main transition">
+                        <button onclick="regNext(3)" class="w-full bg-nexo-main text-slate-900 font-bold py-4 rounded hover:bg-white transition">FINALIZAR CADASTRO</button>
+                        <button onclick="regNext(1)" class="w-full text-slate-400 text-sm">Voltar</button>
+                    </div>
                 </div>
 
                 <div id="reg-step-loading" class="reg-step hidden-view flex flex-col items-center py-10">
                     <div class="loader mb-4"></div>
-                    <p class="text-nexo-main font-bold">CONECTANDO AO BANCO...</p>
+                    <p class="text-nexo-main font-bold animate-pulse">GRAVANDO NOS SERVIDORES GOOGLE...</p>
                 </div>
             </div>
         </section>
 
         <!-- LOGIN -->
         <section id="view-login" class="view-section hidden-view min-h-screen flex items-center justify-center p-4">
-            <div class="glass-panel p-8 rounded-xl w-full max-w-md">
-                <h3 class="text-xl font-display mb-6">LOGIN</h3>
-                <input type="text" id="login-id" placeholder="E-mail ou Código SUN" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-4 outline-none focus:border-nexo-main">
-                <input type="password" id="login-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-4 outline-none focus:border-nexo-main">
-                <p id="login-error" class="text-red-500 text-sm mb-4"></p>
-                <button onclick="submitLogin()" class="w-full bg-white text-slate-900 font-bold py-3 rounded">ENTRAR</button>
+            <div class="glass-panel p-8 rounded-xl w-full max-w-md border-t-4 border-t-white">
+                <h3 class="text-xl font-display font-bold mb-6 text-center tracking-widest">AUTENTICAÇÃO</h3>
+                <div class="space-y-4">
+                    <input type="text" id="login-id" placeholder="E-mail ou SUN-ID" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main">
+                    <input type="password" id="login-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main">
+                    <p id="login-error" class="text-red-500 text-sm text-center"></p>
+                    <button onclick="submitLogin()" class="w-full bg-white text-slate-900 font-bold py-4 rounded hover:bg-nexo-main transition">ENTRAR</button>
+                </div>
             </div>
         </section>
 
         <!-- DASHBOARD -->
         <section id="view-dashboard" class="view-section hidden-view p-6">
-            <div class="max-w-4xl mx-auto bg-slate-800 rounded-xl p-8 border border-slate-700">
-                <div class="flex justify-between items-start mb-10">
-                    <div>
-                        <h2 id="dash-nick" class="text-4xl font-display font-bold">Jogador</h2>
-                        <p id="dash-id" class="text-nexo-main font-mono text-sm">SUN-XXXX</p>
-                        <div id="dash-role-badge" class="mt-2"></div>
+            <div class="max-w-4xl mx-auto bg-slate-900/50 backdrop-blur-xl rounded-2xl p-10 border border-slate-800 shadow-2xl">
+                <div class="flex flex-col md:flex-row justify-between items-center gap-6 mb-12">
+                    <div class="text-center md:text-left">
+                        <h2 id="dash-nick" class="text-5xl font-display font-black tracking-tight">Jogador</h2>
+                        <p id="dash-id" class="text-nexo-main font-mono text-lg mt-1">SUN-XXXX</p>
+                        <div id="dash-role-badge" class="mt-4"></div>
                     </div>
-                    <button onclick="logout()" class="text-red-400 font-bold border border-red-900/30 px-3 py-1 rounded text-sm">SAIR</button>
+                    <button onclick="logout()" class="bg-red-500/10 text-red-500 border border-red-500/20 px-6 py-2 rounded-full font-bold hover:bg-red-500 hover:text-white transition">DESCONECTAR</button>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="bg-slate-900 p-6 rounded border border-slate-700">
-                        <p class="text-xs text-slate-500 mb-1 uppercase font-bold tracking-wider">Status do Perfil</p>
-                        <p class="text-emerald-400 font-bold">Sincronizado com a Nuvem</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-slate-950 p-8 rounded-2xl border border-slate-800 group hover:border-nexo-main transition">
+                        <p class="text-xs text-slate-500 mb-2 uppercase font-bold tracking-widest">Firestore Status</p>
+                        <div class="flex items-center gap-3">
+                            <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
+                            <p class="text-emerald-400 font-bold">CONECTADO À NUVEM</p>
+                        </div>
                     </div>
-                    <div class="bg-slate-900 p-6 rounded border border-slate-700">
-                        <p class="text-xs text-slate-500 mb-1 uppercase font-bold tracking-wider">Acesso ao Jogo</p>
-                        <p class="text-white">Liberado (Alpha)</p>
+                    <div class="bg-slate-950 p-8 rounded-2xl border border-slate-800">
+                        <p class="text-xs text-slate-500 mb-2 uppercase font-bold tracking-widest">Conta Oficial</p>
+                        <p class="text-white font-medium">Membro da Comunidade Nexo</p>
                     </div>
                 </div>
             </div>
@@ -409,23 +407,25 @@
         <!-- ADMIN -->
         <section id="view-admin" class="view-section hidden-view p-6">
             <div class="max-w-6xl mx-auto">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-2xl font-display font-bold text-red-500">PAINEL [San] (<span id="admin-count">0</span>)</h2>
-                    <button onclick="logout()" class="bg-red-600 px-4 py-2 rounded text-xs font-bold">LOGOUT MESTRE</button>
+                <div class="flex justify-between items-end mb-8">
+                    <div>
+                        <p class="text-red-500 font-bold text-xs tracking-widest uppercase mb-1">Painel Administrativo</p>
+                        <h2 class="text-4xl font-display font-black italic">DATABASE [San]</h2>
+                    </div>
+                    <button onclick="logout()" class="bg-red-600 px-6 py-2 rounded font-bold shadow-lg shadow-red-900/40 hover:scale-105 transition">SAIR DO MODO MESTRE</button>
                 </div>
-                <div class="bg-slate-900 rounded border border-slate-800 overflow-hidden">
+                <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-2xl">
                     <table class="w-full text-left">
-                        <thead class="bg-slate-950 text-slate-500 text-[10px] uppercase">
+                        <thead class="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-tighter">
                             <tr>
-                                <th class="p-4">ID</th>
-                                <th class="p-4">Nick</th>
-                                <th class="p-4">E-mail</th>
-                                <th class="p-4">Senha</th>
-                                <th class="p-4">Cargo</th>
-                                <th class="p-4">Ações</th>
+                                <th class="p-5">Identificador</th>
+                                <th class="p-5">Nome</th>
+                                <th class="p-5">Contato</th>
+                                <th class="p-5">Permissão</th>
+                                <th class="p-5">Controle</th>
                             </tr>
                         </thead>
-                        <tbody id="admin-table-body"></tbody>
+                        <tbody id="admin-table-body" class="divide-y divide-slate-800"></tbody>
                     </table>
                 </div>
             </div>
@@ -434,20 +434,28 @@
 
     <!-- MODAL EDIT -->
     <div id="modal-edit" class="fixed inset-0 modal-overlay hidden-view flex items-center justify-center p-4 z-[100]">
-        <div class="bg-slate-800 p-6 rounded-lg w-full max-w-md border border-slate-600">
-            <h3 class="text-xl font-display mb-6">EDITAR CONTA</h3>
-            <div class="space-y-4">
+        <div class="bg-slate-900 p-8 rounded-2xl w-full max-w-md border border-slate-700 shadow-3xl">
+            <h3 class="text-2xl font-display font-bold mb-8 border-b border-slate-800 pb-4">GESTÃO DE PERFIL</h3>
+            <div class="space-y-5">
                 <input type="hidden" id="edit-sunid">
-                <input type="text" id="edit-nick" placeholder="Nick" class="w-full bg-slate-900 border border-slate-700 p-3 rounded text-white">
-                <input type="email" id="edit-email" placeholder="E-mail" class="w-full bg-slate-900 border border-slate-700 p-3 rounded text-white">
-                <input type="text" id="edit-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded text-white">
-                <select id="edit-role" class="w-full bg-slate-900 border border-slate-700 p-3 rounded text-white">
-                    <option value="user">Player</option>
-                    <option value="admin">Admin</option>
-                </select>
-                <div class="flex gap-2 pt-4">
-                    <button onclick="document.getElementById('modal-edit').classList.add('hidden-view')" class="w-1/2 bg-slate-700 py-3 rounded font-bold">CANCELAR</button>
-                    <button onclick="saveEdit()" class="w-1/2 bg-nexo-main text-slate-900 py-3 rounded font-bold">SALVAR</button>
+                <div>
+                    <label class="text-[10px] uppercase text-slate-500 font-bold mb-1 block">Nickname</label>
+                    <input type="text" id="edit-nick" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none">
+                </div>
+                <div>
+                    <label class="text-[10px] uppercase text-slate-500 font-bold mb-1 block">E-mail</label>
+                    <input type="email" id="edit-email" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none">
+                </div>
+                <div>
+                    <label class="text-[10px] uppercase text-slate-500 font-bold mb-1 block">Cargo no Sistema</label>
+                    <select id="edit-role" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none">
+                        <option value="user">Jogador Comum</option>
+                        <option value="admin">Administrador [Mod]</option>
+                    </select>
+                </div>
+                <div class="flex gap-3 pt-6">
+                    <button onclick="document.getElementById('modal-edit').classList.add('hidden-view')" class="w-1/2 bg-slate-800 py-4 rounded font-bold hover:bg-slate-700 transition">CANCELAR</button>
+                    <button onclick="saveEdit()" class="w-1/2 bg-nexo-main text-slate-900 py-4 rounded font-bold hover:bg-white transition">ATUALIZAR</button>
                 </div>
             </div>
         </div>
