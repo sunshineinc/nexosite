@@ -3,103 +3,110 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexo - Battle Royale (Cloud)</title>
+    <title>Nexo - Battle Royale (Cloud Ultimate)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;500;700&display=swap" rel="stylesheet">
 
+    <!-- FIREBASE MODULE -->
     <script type="module">
-        // Importando Firebase de forma segura
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, getDocs, collection, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // Configurações do ambiente
+        // Configurações
         const firebaseConfig = JSON.parse(__firebase_config);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexo-game-default';
         
-        // Inicialização
         const app_firebase = initializeApp(firebaseConfig);
         const auth = getAuth(app_firebase);
         const db = getFirestore(app_firebase);
 
-        // Caminhos seguindo a REGRA 1
+        // Referências
         const getPublicCollection = () => collection(db, 'artifacts', appId, 'public', 'data', 'users');
-        const getUserDoc = (uid) => doc(db, 'artifacts', appId, 'public', 'data', 'users', uid);
+        const getUserDoc = (sunId) => doc(db, 'artifacts', appId, 'public', 'data', 'users', sunId);
 
         // Estado Global
         window.state = {
-            user: null,
-            allUsers: [],
-            isLoaded: false
+            currentUser: null,
+            allUsers: [], // Cache para Admin
+            dbReady: false
         };
 
-        // --- AUTENTICAÇÃO ---
-        async function initAuth() {
+        // --- AUTH & LOAD ---
+        async function initSystem() {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (error) {
-                console.error("Erro na auth:", error);
-            }
+            } catch (error) { console.error("Auth Error:", error); }
         }
 
-        onAuthStateChanged(auth, async (user) => {
-            window.state.user = user;
+        onAuthStateChanged(auth, (user) => {
             if (user) {
-                console.log("Usuário autenticado:", user.uid);
-                loadData();
+                window.state.dbReady = true;
+                startRealtimeListener();
             }
         });
 
-        // --- CARREGAMENTO DE DADOS ---
-        function loadData() {
-            if (!window.state.user) return;
-
-            // Ouvinte em tempo real para todos os usuários (apenas para Admin ver)
+        // Listener em Tempo Real (Core do Sistema)
+        function startRealtimeListener() {
             onSnapshot(getPublicCollection(), (snapshot) => {
                 const users = [];
-                snapshot.forEach(doc => users.push({ id: doc.id, ...doc.data() }));
+                snapshot.forEach(doc => users.push(doc.data()));
                 window.state.allUsers = users;
-                
-                // Atualizar UI se estiver no painel admin
-                if (document.getElementById('view-admin').offsetParent !== null) {
-                    renderAdminTable();
+
+                // 1. Atualizar UI do Admin se estiver aberta
+                if (!document.getElementById('view-admin').classList.contains('hidden-view')) {
+                    window.renderAdminTable();
                 }
-                
-                // Se o usuário logado tiver uma conta no banco, carregar info
-                const myAccount = users.find(u => u.uid === window.state.user.uid || u.email === localStorage.getItem('nexo_logged_email'));
-                if (myAccount && !window.state.isLoaded) {
-                    window.state.isLoaded = true;
-                    updateDashboardUI(myAccount);
+
+                // 2. Verificar sessão atual
+                const storedEmail = localStorage.getItem('nexo_session_email');
+                if (storedEmail) {
+                    const myUser = users.find(u => u.email === storedEmail);
+                    if (myUser) {
+                        window.state.currentUser = myUser;
+                        updateDashboardUI(myUser);
+                        updateNavUI(myUser);
+                    } else {
+                        // Se o usuário foi deletado do banco enquanto estava logado
+                        if (window.state.currentUser) logout();
+                    }
                 }
-            }, (err) => console.error("Erro Firestore:", err));
+            });
         }
 
-        // --- FUNÇÕES DE NEGÓCIO ---
-        window.registerUser = async (email, pass, nick) => {
-            const uid = window.state.user.uid;
+        // --- API EXPOSTA PARA O HTML ---
+        
+        // Registrar (Salva no Firestore)
+        window.apiRegister = async (email, pass, nick) => {
+            if (!window.state.dbReady) return alert("Conectando ao servidor...");
+            
+            // Verificar duplicidade localmente antes de enviar (otimização)
+            if (window.state.allUsers.find(u => u.email === email)) throw new Error("E-mail já cadastrado.");
+            if (window.state.allUsers.find(u => u.nick === nick)) throw new Error("Nickname em uso.");
+
             const sunId = 'SUN-' + Math.random().toString(36).substr(2, 4).toUpperCase() + '-' + Math.random().toString(36).substr(2, 4).toUpperCase();
             
             const userData = {
-                uid: uid,
                 sunId: sunId,
                 email: email,
-                pass: btoa(pass), // Ofuscação simples para o Admin ver
+                pass: btoa(pass), // Base64 para admin ver
                 nick: nick,
-                role: 'user',
+                role: 'user', // Default
                 created_at: new Date().toISOString()
             };
 
             await setDoc(getUserDoc(sunId), userData);
-            localStorage.setItem('nexo_logged_email', email);
+            localStorage.setItem('nexo_session_email', email); // Sessão persistente
             return userData;
         };
 
-        window.loginUser = async (identifier, password, method) => {
+        // Login
+        window.apiLogin = async (identifier, password, method) => {
             const users = window.state.allUsers;
             let found = null;
 
@@ -110,201 +117,480 @@
             }
 
             if (found) {
-                localStorage.setItem('nexo_logged_email', found.email);
+                localStorage.setItem('nexo_session_email', found.email);
+                window.state.currentUser = found;
                 return { success: true, user: found };
             }
-            return { success: false, msg: "Dados inválidos." };
+            return { success: false, msg: "Credenciais inválidas." };
         };
 
-        window.deleteUser = async (id) => {
-            await deleteDoc(getUserDoc(id));
+        // Admin: Atualizar Usuário
+        window.apiUpdateUser = async (sunId, newData) => {
+            await updateDoc(getUserDoc(sunId), newData);
         };
 
-        window.updateUser = async (id, data) => {
-            await updateDoc(getUserDoc(id), data);
+        // Admin: Deletar Usuário
+        window.apiDeleteUser = async (sunId) => {
+            await deleteDoc(getUserDoc(sunId));
         };
 
-        initAuth();
+        initSystem();
     </script>
 
-    <style>
-        body { background-color: #0f172a; color: white; font-family: 'Rajdhani', sans-serif; }
-        .hero-bg { background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%); }
-        .nexo-gradient { background: linear-gradient(to r, #fbbf24, #f59e0b); }
-        .hidden-view { display: none !important; }
-        .font-display { font-family: 'Orbitron', sans-serif; }
-        .modal-overlay { background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); }
-    </style>
-</head>
-<body class="min-h-screen flex flex-col">
-
-    <!-- NAV -->
-    <nav class="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto flex justify-between items-center">
-            <div class="flex items-center gap-2 cursor-pointer" onclick="showView('home')">
-                <i class="fa-solid fa-sun text-amber-400 text-2xl"></i>
-                <h1 class="text-2xl font-display font-bold tracking-tighter">NEXO</h1>
-            </div>
-            <div id="nav-auth">
-                <button onclick="showView('login')" class="text-sm font-bold hover:text-amber-400 mr-4">LOGIN</button>
-                <button onclick="showView('register')" class="bg-amber-400 text-slate-900 px-4 py-2 rounded font-bold text-sm">CRIAR CONTA</button>
-            </div>
-        </div>
-    </nav>
-
-    <!-- VIEWS -->
-    <main class="flex-grow">
-        <!-- HOME -->
-        <section id="view-home" class="view-section hero-bg min-h-[80vh] flex flex-col items-center justify-center text-center px-4">
-            <h2 class="text-5xl md:text-7xl font-display font-black mb-4">CONECTADO À NUVEM</h2>
-            <p class="text-slate-400 max-w-xl mb-8">Agora seus dados do Nexo estão salvos no banco de dados global. Suas conquistas não serão perdidas.</p>
-            <div class="flex gap-4">
-                <button onclick="showView('register')" class="bg-amber-400 text-slate-900 px-8 py-4 font-bold rounded shadow-lg shadow-amber-500/20">COMEÇAR AGORA</button>
-            </div>
-        </section>
-
-        <!-- REGISTER -->
-        <section id="view-register" class="view-section hidden-view min-h-screen flex items-center justify-center p-4">
-            <div class="bg-slate-800 p-8 rounded-xl border border-slate-700 w-full max-w-md">
-                <h3 class="text-2xl font-display text-amber-400 mb-6">NOVA CONTA</h3>
-                <input type="email" id="reg-email" placeholder="E-mail" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-4 outline-none focus:border-amber-400">
-                <input type="password" id="reg-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-4 outline-none focus:border-amber-400">
-                <input type="text" id="reg-nick" placeholder="Nickname (Sem [San])" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-6 outline-none focus:border-amber-400">
-                <button onclick="handleRegister()" class="w-full bg-amber-400 text-slate-900 font-bold py-3 rounded">CRIAR CONTA</button>
-            </div>
-        </section>
-
-        <!-- LOGIN -->
-        <section id="view-login" class="view-section hidden-view min-h-screen flex items-center justify-center p-4">
-            <div class="bg-slate-800 p-8 rounded-xl border border-slate-700 w-full max-w-md">
-                <h3 class="text-2xl font-display text-white mb-6">LOGIN</h3>
-                <input type="text" id="log-id" placeholder="E-mail ou Código SUN" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-4 outline-none focus:border-amber-400">
-                <input type="password" id="log-pass" placeholder="Senha (se usar e-mail)" class="w-full bg-slate-900 border border-slate-700 p-3 rounded mb-6 outline-none focus:border-amber-400">
-                <button onclick="handleLogin()" class="w-full bg-white text-slate-900 font-bold py-3 rounded">ENTRAR</button>
-            </div>
-        </section>
-
-        <!-- DASHBOARD -->
-        <section id="view-dashboard" class="view-section hidden-view p-6">
-            <div class="max-w-4xl mx-auto bg-slate-800 rounded-xl p-8 border border-slate-700 shadow-2xl">
-                <div class="flex justify-between items-start mb-8">
-                    <div>
-                        <h2 id="dash-nick" class="text-4xl font-display font-bold">Player</h2>
-                        <p id="dash-id" class="text-amber-400 font-mono">SUN-XXXX-XXXX</p>
-                    </div>
-                    <button onclick="logout()" class="text-red-400 font-bold">SAIR</button>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="bg-slate-900 p-4 rounded border border-slate-700">
-                        <p class="text-xs text-slate-500 uppercase font-bold">Status do Servidor</p>
-                        <p class="text-emerald-400">Online & Sincronizado</p>
-                    </div>
-                    <div class="bg-slate-900 p-4 rounded border border-slate-700">
-                        <p class="text-xs text-slate-500 uppercase font-bold">Tipo de Conta</p>
-                        <p id="dash-role">User</p>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ADMIN -->
-        <section id="view-admin" class="view-section hidden-view p-6">
-            <div class="max-w-6xl mx-auto">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-3xl font-display font-bold text-red-500">PAINEL DE CONTROLE [San]</h2>
-                    <button onclick="logout()" class="bg-red-600 px-4 py-2 rounded font-bold">LOGOUT ADMIN</button>
-                </div>
-                <div class="bg-slate-800 rounded-lg overflow-hidden border border-slate-700">
-                    <table class="w-full text-left text-sm">
-                        <thead class="bg-slate-900 text-slate-400">
-                            <tr>
-                                <th class="p-4">ID</th>
-                                <th class="p-4">Nick</th>
-                                <th class="p-4">E-mail</th>
-                                <th class="p-4">Senha</th>
-                                <th class="p-4">Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody id="admin-table-body">
-                            <!-- JS -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </section>
-    </main>
-
     <script>
-        function showView(name) {
-            document.querySelectorAll('.view-section').forEach(v => v.classList.add('hidden-view'));
-            document.getElementById(`view-${name}`).classList.remove('hidden-view');
-        }
-
-        async function handleRegister() {
-            const email = document.getElementById('reg-email').value;
-            const pass = document.getElementById('reg-pass').value;
-            const nick = document.getElementById('reg-nick').value;
-
-            if (nick.toLowerCase().startsWith('[san]')) return alert("Nickname reservado!");
-            
-            try {
-                await window.registerUser(email, pass, nick);
-                alert("Conta criada no banco de dados!");
-                location.reload(); 
-            } catch (e) { alert("Erro ao salvar."); }
-        }
-
-        async function handleLogin() {
-            const id = document.getElementById('log-id').value;
-            const pass = document.getElementById('log-pass').value;
-            const method = id.includes('@') ? 'email' : 'code';
-
-            const res = await window.loginUser(id, pass, method);
-            if (res.success) {
-                if (res.user.role === 'admin' || res.user.nick.startsWith('[San]')) {
-                    showView('admin');
-                    renderAdminTable();
-                } else {
-                    showView('dashboard');
-                    updateDashboardUI(res.user);
+        // --- UI LOGIC (Pure JS) ---
+        
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nexo: { main: '#fbbf24', dark: '#0f172a' }
+                    },
+                    fontFamily: {
+                        display: ['Orbitron', 'sans-serif'],
+                        sans: ['Rajdhani', 'sans-serif']
+                    }
                 }
+            }
+        }
+
+        // --- NAVEGAÇÃO ---
+        function router(viewName) {
+            document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden-view'));
+            
+            const user = window.state.currentUser;
+
+            // Guards
+            if (viewName === 'dashboard' && !user) return router('login');
+            if (viewName === 'admin') {
+                if (!user || (!user.nick.startsWith('[San]') && user.role !== 'admin')) {
+                    alert("Acesso Negado: Área restrita [San].");
+                    return router('home');
+                }
+                window.renderAdminTable();
+            }
+
+            document.getElementById(`view-${viewName}`).classList.remove('hidden-view');
+        }
+
+        function updateNavUI(user) {
+            const nav = document.getElementById('nav-links');
+            if (user) {
+                const isAdmin = user.nick.startsWith('[San]') || user.role === 'admin';
+                nav.innerHTML = `
+                    <button onclick="router('${isAdmin ? 'admin' : 'dashboard'}')" class="flex items-center gap-2 text-white hover:text-nexo-main transition">
+                        <span class="font-bold">${user.nick}</span>
+                        <div class="w-8 h-8 rounded-full bg-slate-800 border border-nexo-main flex items-center justify-center">
+                            <i class="fa-solid fa-user"></i>
+                        </div>
+                    </button>
+                `;
             } else {
-                alert(res.msg);
+                nav.innerHTML = `
+                    <button onclick="router('login')" class="text-white hover:text-nexo-main font-bold mr-4">LOGIN</button>
+                    <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-4 py-2 rounded font-bold hover:scale-105 transition">CRIAR CONTA</button>
+                `;
             }
         }
 
         function updateDashboardUI(user) {
+            if(!user) return;
             document.getElementById('dash-nick').textContent = user.nick;
             document.getElementById('dash-id').textContent = user.sunId;
-            document.getElementById('dash-role').textContent = user.role;
-            document.getElementById('nav-auth').innerHTML = `<span class="text-amber-400 font-bold">${user.nick}</span>`;
+            document.getElementById('dash-role-badge').innerHTML = user.role === 'admin' ? 
+                '<span class="bg-red-900 text-red-200 text-xs px-2 py-1 rounded border border-red-500">ADMIN</span>' : 
+                '<span class="bg-slate-700 text-slate-300 text-xs px-2 py-1 rounded">PLAYER</span>';
         }
 
-        function renderAdminTable() {
-            const body = document.getElementById('admin-table-body');
-            body.innerHTML = window.state.allUsers.map(u => `
-                <tr class="border-t border-slate-700">
-                    <td class="p-4 font-mono text-xs text-amber-400">${u.sunId}</td>
-                    <td class="p-4">${u.nick}</td>
-                    <td class="p-4 text-slate-400">${u.email}</td>
-                    <td class="p-4 font-mono text-xs">${atob(u.pass)}</td>
-                    <td class="p-4">
-                        <button onclick="confirmDelete('${u.sunId}')" class="text-red-500 hover:text-red-300"><i class="fa-solid fa-trash"></i></button>
+        function logout() {
+            localStorage.removeItem('nexo_session_email');
+            window.state.currentUser = null;
+            location.reload();
+        }
+
+        // --- REGISTER FLOW ---
+        let regData = {};
+
+        function regNext(step) {
+            if (step === 2) {
+                const email = document.getElementById('reg-email').value;
+                const pass = document.getElementById('reg-pass').value;
+                if (!email.includes('@') || pass.length < 4) return alert("Dados inválidos.");
+                regData.email = email;
+                regData.pass = pass;
+            }
+            if (step === 3) {
+                const nick = document.getElementById('reg-nick').value;
+                if (nick.length < 3) return alert("Nick muito curto.");
+                if (nick.toLowerCase().startsWith('[san]')) return alert("Prefixo [San] é restrito.");
+                regData.nick = nick;
+                finishRegister();
+                return; // Stop here, handle transition in finishRegister
+            }
+
+            document.querySelectorAll('.reg-step').forEach(el => el.classList.add('hidden-view'));
+            document.getElementById(`reg-step-${step}`).classList.remove('hidden-view');
+            
+            // Update steppers
+            for(let i=1; i<=3; i++) {
+                document.getElementById(`step-dot-${i}`).className = i <= step ? 'text-nexo-main' : 'text-slate-600';
+            }
+        }
+
+        async function finishRegister() {
+            // Show Loading
+            document.querySelectorAll('.reg-step').forEach(el => el.classList.add('hidden-view'));
+            document.getElementById('reg-step-loading').classList.remove('hidden-view');
+
+            try {
+                await window.apiRegister(regData.email, regData.pass, regData.nick);
+                setTimeout(() => {
+                    alert("Conta Criada na Nuvem!");
+                    router('dashboard');
+                }, 1500); // Fake delay for UX
+            } catch (e) {
+                alert("Erro: " + e.message);
+                regNext(1); // Reset
+            }
+        }
+
+        // --- LOGIN FLOW ---
+        async function submitLogin() {
+            const id = document.getElementById('login-id').value;
+            const pass = document.getElementById('login-pass').value;
+            const method = id.includes('@') ? 'email' : 'code';
+
+            const res = await window.apiLogin(id, pass, method);
+            if (res.success) {
+                updateNavUI(res.user);
+                updateDashboardUI(res.user);
+                if (res.user.role === 'admin' || res.user.nick.startsWith('[San]')) {
+                    router('admin');
+                } else {
+                    router('dashboard');
+                }
+            } else {
+                document.getElementById('login-error').textContent = res.msg;
+            }
+        }
+
+        // --- ADMIN LOGIC ---
+        window.renderAdminTable = () => {
+            const tbody = document.getElementById('admin-table-body');
+            const users = window.state.allUsers;
+            document.getElementById('admin-count').textContent = users.length;
+
+            tbody.innerHTML = users.map(u => `
+                <tr class="border-b border-slate-700/50 hover:bg-slate-800/50 transition">
+                    <td class="p-3 font-mono text-xs text-yellow-500">${u.sunId}</td>
+                    <td class="p-3 font-bold ${u.nick.startsWith('[San]') ? 'text-red-400' : 'text-white'}">${u.nick}</td>
+                    <td class="p-3 text-sm text-slate-400">${u.email}</td>
+                    <td class="p-3 font-mono text-xs text-slate-500 cursor-pointer hover:text-white" onclick="alert('Senha: ${atob(u.pass)}')">ver senha</td>
+                    <td class="p-3 text-xs">${u.role}</td>
+                    <td class="p-3 flex gap-2">
+                        <button onclick="openEditModal('${u.sunId}')" class="bg-blue-600/20 text-blue-400 p-2 rounded hover:bg-blue-600 hover:text-white transition"><i class="fa-solid fa-pen"></i></button>
+                        <button onclick="deleteUser('${u.sunId}')" class="bg-red-600/20 text-red-400 p-2 rounded hover:bg-red-600 hover:text-white transition"><i class="fa-solid fa-trash"></i></button>
                     </td>
                 </tr>
             `).join('');
         }
 
-        async function confirmDelete(id) {
-            if(confirm("Excluir conta permanentemente no banco de dados?")) {
-                await window.deleteUser(id);
-            }
+        window.openEditModal = (sunId) => {
+            const user = window.state.allUsers.find(u => u.sunId === sunId);
+            if(!user) return;
+
+            document.getElementById('edit-sunid').value = user.sunId;
+            document.getElementById('edit-nick').value = user.nick;
+            document.getElementById('edit-email').value = user.email;
+            document.getElementById('edit-pass').value = atob(user.pass);
+            document.getElementById('edit-role').value = user.role;
+            
+            document.getElementById('modal-edit').classList.remove('hidden-view');
         }
 
-        function logout() {
-            localStorage.removeItem('nexo_logged_email');
-            location.reload();
+        window.saveEdit = async () => {
+            const sunId = document.getElementById('edit-sunid').value;
+            const newData = {
+                nick: document.getElementById('edit-nick').value,
+                email: document.getElementById('edit-email').value,
+                pass: btoa(document.getElementById('edit-pass').value),
+                role: document.getElementById('edit-role').value
+            };
+
+            await window.apiUpdateUser(sunId, newData);
+            document.getElementById('modal-edit').classList.add('hidden-view');
+            alert("Dados salvos na nuvem!");
+        }
+
+        window.deleteUser = async (sunId) => {
+            if(confirm("ATENÇÃO: Isso apagará a conta do banco de dados permanentemente. Continuar?")) {
+                await window.apiDeleteUser(sunId);
+            }
         }
     </script>
+
+    <style>
+        body { background-color: #0f172a; color: white; overflow-x: hidden; }
+        .hero-bg { 
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%); 
+            background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23fbbf24' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+        .hidden-view { display: none !important; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .modal-overlay { background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px); }
+        .neon-shadow { box-shadow: 0 0 15px rgba(251, 191, 36, 0.3); }
+        
+        /* Animation */
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loader { border: 3px solid #334155; border-top: 3px solid #fbbf24; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans">
+
+    <!-- NAVBAR -->
+    <nav class="w-full bg-slate-900/80 backdrop-blur border-b border-slate-800 p-4 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-2 cursor-pointer group" onclick="router('home')">
+                <i class="fa-solid fa-sun text-nexo-main text-2xl group-hover:animate-pulse"></i>
+                <h1 class="text-2xl font-display font-bold text-white tracking-widest group-hover:text-nexo-main transition">NEXO</h1>
+            </div>
+            <div id="nav-links" class="flex gap-4 items-center">
+                <!-- JS Inject -->
+            </div>
+        </div>
+    </nav>
+
+    <!-- MAIN CONTAINER -->
+    <main class="flex-grow relative">
+
+        <!-- VIEW: HOME -->
+        <section id="view-home" class="view-section hero-bg min-h-[90vh] flex items-center justify-center text-center px-4">
+            <div class="max-w-4xl z-10 animate-[fadeIn_1s_ease-out]">
+                <span class="text-nexo-main font-mono text-sm tracking-[0.5em] mb-4 block">BATTLE ROYALE</span>
+                <h2 class="text-6xl md:text-8xl font-display font-black text-white mb-6 leading-none">NEXO <span class="text-transparent bg-clip-text bg-gradient-to-r from-nexo-main to-orange-500">CLOUD</span></h2>
+                <p class="text-xl text-slate-300 mb-10 max-w-2xl mx-auto font-light">
+                    Dados persistentes, sistema multiplayer preparado e gerenciamento em tempo real. Bem-vindo à nova era.
+                </p>
+                
+                <div class="flex flex-col md:flex-row gap-6 justify-center">
+                    <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-10 py-4 font-bold text-lg rounded-sm hover:bg-white hover:neon-shadow transition clip-path-slant">
+                        CRIAR CONTA
+                    </button>
+                    <button onclick="router('login')" class="bg-transparent border border-nexo-main text-nexo-main px-10 py-4 font-bold text-lg rounded-sm hover:bg-nexo-main/10 transition">
+                        LOGIN
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW: REGISTER (Multi-step) -->
+        <section id="view-register" class="view-section hidden-view min-h-screen flex items-center justify-center p-4 bg-slate-900">
+            <div class="glass-panel p-8 rounded-xl shadow-2xl w-full max-w-md relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-nexo-main to-orange-600"></div>
+                <h2 class="text-3xl font-display text-white mb-8 text-center">NOVO AGENTE</h2>
+                
+                <!-- Stepper -->
+                <div class="flex justify-center gap-4 mb-8">
+                    <i id="step-dot-1" class="fa-solid fa-circle text-nexo-main text-xs"></i>
+                    <i id="step-dot-2" class="fa-solid fa-circle text-slate-600 text-xs"></i>
+                    <i id="step-dot-3" class="fa-solid fa-circle text-slate-600 text-xs"></i>
+                </div>
+
+                <!-- Step 1: Auth -->
+                <div id="reg-step-1" class="reg-step">
+                    <label class="block text-xs text-slate-400 font-bold mb-2">E-MAIL</label>
+                    <input type="email" id="reg-email" class="w-full bg-slate-800 border border-slate-600 rounded p-3 mb-4 text-white focus:border-nexo-main outline-none transition">
+                    <label class="block text-xs text-slate-400 font-bold mb-2">SENHA</label>
+                    <input type="password" id="reg-pass" class="w-full bg-slate-800 border border-slate-600 rounded p-3 mb-6 text-white focus:border-nexo-main outline-none transition">
+                    <button onclick="regNext(2)" class="w-full bg-nexo-main text-slate-900 font-bold py-3 rounded hover:bg-white transition">PRÓXIMO</button>
+                </div>
+
+                <!-- Step 2: Identity -->
+                <div id="reg-step-2" class="reg-step hidden-view">
+                    <label class="block text-xs text-slate-400 font-bold mb-2">NICKNAME</label>
+                    <input type="text" id="reg-nick" class="w-full bg-slate-800 border border-slate-600 rounded p-3 mb-2 text-white focus:border-nexo-main outline-none transition" placeholder="Ex: AgentZero">
+                    <p class="text-xs text-slate-500 mb-6 italic">Nota: Prefixo [San] é restrito.</p>
+                    <div class="flex gap-3">
+                        <button onclick="regNext(1)" class="w-1/3 border border-slate-600 text-slate-400 font-bold py-3 rounded hover:text-white">VOLTAR</button>
+                        <button onclick="regNext(3)" class="w-2/3 bg-nexo-main text-slate-900 font-bold py-3 rounded hover:bg-white transition">FINALIZAR</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Loading -->
+                <div id="reg-step-loading" class="reg-step hidden-view flex flex-col items-center py-8">
+                    <div class="loader mb-4"></div>
+                    <p class="text-nexo-main font-bold animate-pulse">SINCRONIZANDO COM A NUVEM...</p>
+                    <p class="text-xs text-slate-500 mt-2">Criptografando credenciais</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW: LOGIN -->
+        <section id="view-login" class="view-section hidden-view min-h-screen flex items-center justify-center p-4 bg-slate-900">
+            <div class="glass-panel p-8 rounded-xl shadow-2xl w-full max-w-md border border-slate-700">
+                <h2 class="text-3xl font-display text-white mb-6 text-center">ACESSO</h2>
+                <div class="mb-4">
+                    <label class="block text-xs text-slate-400 font-bold mb-2">IDENTIFICADOR (E-mail ou Código)</label>
+                    <input type="text" id="login-id" class="w-full bg-slate-800 border border-slate-600 rounded p-3 text-white focus:border-nexo-main outline-none">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-xs text-slate-400 font-bold mb-2">SENHA</label>
+                    <input type="password" id="login-pass" class="w-full bg-slate-800 border border-slate-600 rounded p-3 text-white focus:border-nexo-main outline-none">
+                </div>
+                <p id="login-error" class="text-red-500 text-sm mb-4 text-center"></p>
+                <button onclick="submitLogin()" class="w-full bg-white text-slate-900 font-bold py-3 rounded hover:bg-slate-200 transition">ENTRAR</button>
+                <p class="text-center mt-6 text-slate-500 text-sm cursor-pointer hover:text-white" onclick="router('register')">Criar nova conta</p>
+            </div>
+        </section>
+
+        <!-- VIEW: DASHBOARD -->
+        <section id="view-dashboard" class="view-section hidden-view p-6 pt-10">
+            <div class="max-w-6xl mx-auto">
+                <!-- Header Card -->
+                <div class="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-8 border border-slate-700 shadow-2xl flex flex-col md:flex-row items-center gap-8 relative overflow-hidden">
+                    <!-- Background Decor -->
+                    <i class="fa-solid fa-gamepad absolute -right-12 -bottom-12 text-9xl text-white opacity-5 rotate-12"></i>
+                    
+                    <div class="relative">
+                        <div class="w-24 h-24 rounded-full bg-slate-950 border-2 border-nexo-main flex items-center justify-center text-4xl text-white">
+                            <i class="fa-solid fa-user-astronaut"></i>
+                        </div>
+                        <div class="absolute bottom-0 right-0 w-6 h-6 bg-green-500 border-2 border-slate-900 rounded-full"></div>
+                    </div>
+                    
+                    <div class="text-center md:text-left z-10">
+                        <h2 id="dash-nick" class="text-4xl font-display font-bold text-white">Carregando...</h2>
+                        <div class="flex items-center gap-3 mt-2 justify-center md:justify-start">
+                            <span id="dash-id" class="font-mono text-nexo-main bg-slate-950 px-2 py-1 rounded text-sm border border-nexo-main/30">...</span>
+                            <span id="dash-role-badge"></span>
+                        </div>
+                    </div>
+                    
+                    <div class="md:ml-auto z-10 flex gap-4">
+                        <button onclick="alert('Sistema de Amigos em breve!')" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded font-bold text-sm transition"><i class="fa-solid fa-user-group mr-2"></i> AMIGOS</button>
+                        <button onclick="logout()" class="bg-red-900/50 hover:bg-red-900 text-red-200 px-4 py-2 rounded font-bold text-sm border border-red-800 transition">SAIR</button>
+                    </div>
+                </div>
+
+                <!-- Info Grid -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+                    <!-- Downloads -->
+                    <div class="bg-slate-800 p-6 rounded-xl border border-slate-700 hover:border-nexo-main transition group">
+                        <h3 class="text-lg font-bold text-white mb-2"><i class="fa-brands fa-windows mr-2"></i> Game Client</h3>
+                        <p class="text-sm text-slate-400 mb-4">Versão Alpha 0.1.2 - Servidores Cloud Ativos</p>
+                        <button class="w-full bg-slate-700 text-slate-500 py-2 rounded font-bold cursor-not-allowed border border-slate-600" disabled>DOWNLOAD (EM BREVE)</button>
+                    </div>
+
+                    <!-- Stats -->
+                    <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                        <h3 class="text-lg font-bold text-white mb-4">Estatísticas</h3>
+                        <div class="flex justify-between text-sm mb-2 border-b border-slate-700 pb-2">
+                            <span class="text-slate-400">Vitórias</span>
+                            <span class="text-nexo-main font-mono">0</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-400">Partidas</span>
+                            <span class="text-white font-mono">0</span>
+                        </div>
+                    </div>
+
+                    <!-- News -->
+                    <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                        <h3 class="text-lg font-bold text-white mb-2 text-nexo-main">Novidades</h3>
+                        <ul class="space-y-3">
+                            <li class="text-xs text-slate-300 border-l-2 border-blue-500 pl-3">
+                                <span class="block text-slate-500 text-[10px]">HOJE</span>
+                                Sistema de Cloud Database implementado.
+                            </li>
+                            <li class="text-xs text-slate-300 border-l-2 border-nexo-main pl-3">
+                                <span class="block text-slate-500 text-[10px]">ONTEM</span>
+                                Novo mapa "Ruínas Solares" anunciado.
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW: ADMIN PANEL -->
+        <section id="view-admin" class="view-section hidden-view p-6 min-h-screen">
+            <div class="max-w-7xl mx-auto">
+                <div class="flex justify-between items-center mb-6 bg-red-950/40 p-6 rounded-lg border border-red-900 backdrop-blur">
+                    <div class="flex items-center gap-4">
+                        <div class="bg-red-500/20 p-3 rounded-full">
+                            <i class="fa-solid fa-shield-halved text-2xl text-red-500"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-2xl font-display font-bold text-white">PAINEL [San]</h2>
+                            <p class="text-xs text-red-300">Conexão Segura • Database Master • <span id="admin-count">0</span> Usuários</p>
+                        </div>
+                    </div>
+                    <button onclick="router('home')" class="text-sm text-white hover:text-red-400 underline">Sair do Modo Admin</button>
+                </div>
+
+                <!-- Users Table -->
+                <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800 shadow-xl">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-slate-400">
+                            <thead class="bg-slate-950 text-xs uppercase font-medium text-slate-500">
+                                <tr>
+                                    <th class="p-4">Sun Code</th>
+                                    <th class="p-4">Nickname</th>
+                                    <th class="p-4">E-mail</th>
+                                    <th class="p-4">Senha (Decoded)</th>
+                                    <th class="p-4">Role</th>
+                                    <th class="p-4">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-table-body" class="divide-y divide-slate-800">
+                                <!-- JS Injection -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- MODAL: EDIT USER -->
+        <div id="modal-edit" class="fixed inset-0 z-[100] modal-overlay hidden-view flex items-center justify-center p-4">
+            <div class="bg-slate-800 rounded-lg shadow-2xl border border-slate-600 w-full max-w-lg p-6 animate-[fadeIn_0.2s_ease-out]">
+                <h3 class="text-xl font-display font-bold text-white mb-4 border-b border-slate-700 pb-2">Editar Agente</h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs text-slate-500 font-bold mb-1">SUN CODE (Imutável)</label>
+                        <input type="text" id="edit-sunid" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-nexo-main font-mono text-sm opacity-50 cursor-not-allowed" readonly>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs text-slate-400 font-bold mb-1">NICKNAME</label>
+                            <input type="text" id="edit-nick" class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white focus:border-nexo-main outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 font-bold mb-1">CARGO</label>
+                            <select id="edit-role" class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none">
+                                <option value="user">Player</option>
+                                <option value="admin">Admin [San]</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 font-bold mb-1">E-MAIL</label>
+                        <input type="email" id="edit-email" class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white focus:border-nexo-main outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 font-bold mb-1">SENHA (Texto Puro)</label>
+                        <input type="text" id="edit-pass" class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-yellow-500 focus:border-nexo-main outline-none">
+                    </div>
+                </div>
+
+                <div class="flex gap-3 mt-6 pt-4 border-t border-slate-700">
+                    <button onclick="document.getElementById('modal-edit').classList.add('hidden-view')" class="w-1/2 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded font-bold transition">Cancelar</button>
+                    <button onclick="saveEdit()" class="w-1/2 bg-nexo-main hover:bg-white text-slate-900 py-2 rounded font-bold transition">Salvar na Nuvem</button>
+                </div>
+            </div>
+        </div>
+
+    </main>
 </body>
 </html>
