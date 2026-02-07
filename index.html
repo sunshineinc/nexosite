@@ -14,7 +14,6 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // --- CONFIGURAÇÃO MANUAL (APLICADA COM SUAS CHAVES) ---
         const manualConfig = {
             apiKey: "AIzaSyBbxLpUZ0hh9BOVjDJ8USR3GleAdsN3xKk",
             authDomain: "nexocloud-62fc1.firebaseapp.com",
@@ -27,7 +26,6 @@
 
         let firebaseConfig = {};
         try {
-            // Prioriza variáveis do ambiente (Gemini), se não existirem, usa suas chaves manuais (Render)
             if (typeof __firebase_config !== 'undefined' && __firebase_config) {
                 firebaseConfig = JSON.parse(__firebase_config);
             } else {
@@ -38,27 +36,20 @@
         }
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexo-game-default';
-        
         let app_firebase, auth, db;
         
         window.state = {
             currentUser: null,
             allUsers: [],
-            dbReady: false,
-            initError: false
+            dbReady: false
         };
 
         if (firebaseConfig.apiKey) {
-            try {
-                app_firebase = initializeApp(firebaseConfig);
-                auth = getAuth(app_firebase);
-                db = getFirestore(app_firebase);
-            } catch(e) {
-                window.state.initError = true;
-            }
+            app_firebase = initializeApp(firebaseConfig);
+            auth = getAuth(app_firebase);
+            db = getFirestore(app_firebase);
         }
 
-        // Caminhos seguindo a regra obrigatória de caminhos públicos
         const getPublicCollection = () => collection(db, 'artifacts', appId, 'public', 'data', 'users');
         const getUserDoc = (sunId) => doc(db, 'artifacts', appId, 'public', 'data', 'users', sunId);
 
@@ -70,9 +61,7 @@
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (error) { 
-                console.error("Auth Error:", error);
-            }
+            } catch (error) { console.error("Erro de Autenticação:", error); }
         }
 
         if (auth) {
@@ -86,15 +75,10 @@
 
         function startRealtimeListener() {
             if (!db) return;
-            // Listener simples sem filtros complexos (Regra 2)
             onSnapshot(getPublicCollection(), (snapshot) => {
                 const users = [];
                 snapshot.forEach(doc => users.push(doc.data()));
                 window.state.allUsers = users;
-
-                if (!document.getElementById('view-admin').classList.contains('hidden-view')) {
-                    window.renderAdminTable();
-                }
 
                 const storedEmail = localStorage.getItem('nexo_session_email');
                 if (storedEmail) {
@@ -105,45 +89,27 @@
                         updateNavUI(myUser);
                     }
                 }
-            }, (err) => console.error("Firestore Error:", err));
+                if (!document.getElementById('view-admin').classList.contains('hidden-view')) {
+                    window.renderAdminTable();
+                }
+            });
         }
 
         window.apiRegister = async (email, pass, nick) => {
-            if (!window.state.dbReady) throw new Error("Aguardando conexão com o banco...");
-            
             if (window.state.allUsers.find(u => u.email === email)) throw new Error("E-mail já cadastrado.");
             if (window.state.allUsers.find(u => u.nick === nick)) throw new Error("Nickname em uso.");
 
             const sunId = 'SUN-' + Math.random().toString(36).substr(2, 4).toUpperCase() + '-' + Math.random().toString(36).substr(2, 4).toUpperCase();
-            
             const userData = {
-                sunId: sunId,
-                email: email,
-                pass: btoa(pass),
-                nick: nick,
+                sunId, email, pass: btoa(pass), nick,
                 role: 'user',
+                coins: 500,
                 created_at: new Date().toISOString()
             };
-
             await setDoc(getUserDoc(sunId), userData);
             localStorage.setItem('nexo_session_email', email);
+            window.state.currentUser = userData;
             return userData;
-        };
-
-        window.apiLogin = async (identifier, password, method) => {
-            const users = window.state.allUsers;
-            let found = null;
-            if (method === 'email') {
-                found = users.find(u => u.email === identifier && u.pass === btoa(password));
-            } else {
-                found = users.find(u => u.sunId === identifier);
-            }
-            if (found) {
-                localStorage.setItem('nexo_session_email', found.email);
-                window.state.currentUser = found;
-                return { success: true, user: found };
-            }
-            return { success: false, msg: "Dados incorretos." };
         };
 
         window.apiUpdateUser = async (sunId, newData) => {
@@ -167,10 +133,11 @@
             }
         }
 
+        // Navegação
         function router(viewName) {
             document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden-view'));
             const user = window.state.currentUser;
-
+            
             if (viewName === 'dashboard' && !user) return router('login');
             if (viewName === 'admin') {
                 if (!user || (!user.nick.startsWith('[San]') && user.role !== 'admin')) {
@@ -179,44 +146,11 @@
                 }
                 window.renderAdminTable();
             }
+
             document.getElementById(`view-${viewName}`).classList.remove('hidden-view');
         }
 
-        function updateNavUI(user) {
-            const nav = document.getElementById('nav-links');
-            if (user) {
-                const isAdmin = user.nick.startsWith('[San]') || user.role === 'admin';
-                nav.innerHTML = `
-                    <button onclick="router('${isAdmin ? 'admin' : 'dashboard'}')" class="flex items-center gap-2 text-white hover:text-nexo-main transition">
-                        <span class="font-bold">${user.nick}</span>
-                        <div class="w-8 h-8 rounded-full bg-slate-800 border border-nexo-main flex items-center justify-center">
-                            <i class="fa-solid fa-user"></i>
-                        </div>
-                    </button>
-                `;
-            } else {
-                nav.innerHTML = `
-                    <button onclick="router('login')" class="text-white hover:text-nexo-main font-bold mr-4">LOGIN</button>
-                    <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-4 py-2 rounded font-bold hover:scale-105 transition">CRIAR CONTA</button>
-                `;
-            }
-        }
-
-        function updateDashboardUI(user) {
-            if(!user) return;
-            document.getElementById('dash-nick').textContent = user.nick;
-            document.getElementById('dash-id').textContent = user.sunId;
-            document.getElementById('dash-role-badge').innerHTML = user.role === 'admin' ? 
-                '<span class="bg-red-900 text-red-200 text-xs px-2 py-1 rounded border border-red-500">ADMIN</span>' : 
-                '<span class="bg-slate-700 text-slate-300 text-xs px-2 py-1 rounded">PLAYER</span>';
-        }
-
-        function logout() {
-            localStorage.removeItem('nexo_session_email');
-            window.state.currentUser = null;
-            location.reload();
-        }
-
+        // Lógica de Registro em Etapas (DO SEU CÓDIGO ANTIGO)
         let regData = {};
         function regNext(step) {
             if (step === 2) {
@@ -249,25 +183,68 @@
             }
         }
 
+        // Lógica de Login (ID ou Email)
         async function submitLogin() {
             const id = document.getElementById('login-id').value;
             const pass = document.getElementById('login-pass').value;
-            const res = await window.apiLogin(id, pass, id.includes('@') ? 'email' : 'code');
-            if (res.success) {
-                router(res.user.role === 'admin' || res.user.nick.startsWith('[San]') ? 'admin' : 'dashboard');
+            const users = window.state.allUsers;
+            
+            const found = users.find(u => (u.email === id || u.sunId === id) && u.pass === btoa(pass));
+            
+            if (found) {
+                localStorage.setItem('nexo_session_email', found.email);
+                window.state.currentUser = found;
+                router(found.role === 'admin' || found.nick.startsWith('[San]') ? 'admin' : 'dashboard');
             } else {
-                document.getElementById('login-error').textContent = res.msg;
+                document.getElementById('login-error').textContent = "Credenciais inválidas.";
             }
         }
 
+        // UI Updates
+        function updateNavUI(user) {
+            const nav = document.getElementById('nav-links');
+            if (user) {
+                const isAdmin = user.role === 'admin' || user.nick.startsWith('[San]');
+                nav.innerHTML = `
+                    <button onclick="router('${isAdmin ? 'admin' : 'dashboard'}')" class="flex items-center gap-2 group">
+                        <span class="text-white font-bold text-sm group-hover:text-nexo-main transition">${user.nick}</span>
+                        <div class="w-8 h-8 rounded-full bg-slate-800 border border-nexo-main flex items-center justify-center text-nexo-main">
+                            <i class="fa-solid fa-user text-xs"></i>
+                        </div>
+                    </button>
+                `;
+            } else {
+                nav.innerHTML = `
+                    <button onclick="router('login')" class="text-white hover:text-nexo-main font-bold mr-4 text-sm tracking-widest">LOGIN</button>
+                    <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-4 py-2 rounded font-bold hover:scale-105 transition text-sm">CRIAR CONTA</button>
+                `;
+            }
+        }
+
+        function updateDashboardUI(user) {
+            if(!user) return;
+            document.getElementById('dash-nick').textContent = user.nick;
+            document.getElementById('dash-id').textContent = user.sunId;
+            document.getElementById('dash-coins').textContent = user.coins || 0;
+            document.getElementById('dash-role-badge').innerHTML = user.role === 'admin' ? 
+                '<span class="bg-red-900/30 text-red-500 text-[10px] px-2 py-1 rounded border border-red-500/50 font-bold">ADMIN</span>' : 
+                '<span class="bg-slate-800 text-slate-400 text-[10px] px-2 py-1 rounded font-bold">PLAYER</span>';
+        }
+
+        function logout() {
+            localStorage.removeItem('nexo_session_email');
+            location.reload();
+        }
+
+        // Funções Admin
         window.renderAdminTable = () => {
             const tbody = document.getElementById('admin-table-body');
             tbody.innerHTML = window.state.allUsers.map(u => `
-                <tr class="border-b border-slate-800 hover:bg-slate-800/50">
+                <tr class="border-b border-slate-800 hover:bg-slate-800/30 transition">
                     <td class="p-4 font-mono text-xs text-nexo-main">${u.sunId}</td>
-                    <td class="p-4 font-bold">${u.nick}</td>
-                    <td class="p-4 text-slate-400">${u.email}</td>
-                    <td class="p-4 uppercase text-[10px]">${u.role}</td>
+                    <td class="p-4 font-bold text-sm">${u.nick}</td>
+                    <td class="p-4 text-slate-400 text-xs">${u.email}</td>
+                    <td class="p-4 uppercase text-[10px] font-bold ${u.role === 'admin' ? 'text-red-500' : 'text-slate-500'}">${u.role}</td>
                     <td class="p-4 flex gap-3">
                         <button onclick="openEditModal('${u.sunId}')" class="text-blue-400 hover:text-white"><i class="fa-solid fa-pen"></i></button>
                         <button onclick="deleteUser('${u.sunId}')" class="text-red-400 hover:text-white"><i class="fa-solid fa-trash"></i></button>
@@ -304,101 +281,113 @@
     </script>
 
     <style>
-        body { background-color: #0f172a; color: white; font-family: 'Rajdhani', sans-serif; }
-        .hero-bg { background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%); }
+        body { background-color: #0f172a; color: white; font-family: 'Rajdhani', sans-serif; overflow-x: hidden; }
         .hidden-view { display: none !important; }
-        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .modal-overlay { background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(5px); }
-        .loader { border: 3px solid #334155; border-top: 3px solid #fbbf24; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        .glass-panel { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .hero-glow { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 800px; height: 800px; background: radial-gradient(circle, rgba(251, 191, 36, 0.05) 0%, transparent 70%); z-index: -1; }
+        .loader { border: 2px solid #334155; border-top: 2px solid #fbbf24; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
 
-    <nav class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 p-4 sticky top-0 z-50">
+    <nav class="bg-slate-950/80 backdrop-blur-md border-b border-slate-900 p-4 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto flex justify-between items-center">
-            <div class="flex items-center gap-2 cursor-pointer group" onclick="router('home')">
-                <i class="fa-solid fa-sun text-nexo-main text-2xl group-hover:rotate-90 transition-transform duration-500"></i>
-                <h1 class="text-2xl font-display font-bold tracking-widest">NEXO</h1>
+            <div class="flex items-center gap-2 cursor-pointer" onclick="router('home')">
+                <i class="fa-solid fa-bolt text-nexo-main text-xl"></i>
+                <h1 class="text-xl font-display font-bold tracking-[0.2em]">NEXO</h1>
             </div>
-            <div id="nav-links"></div>
+            <div id="nav-links" class="flex items-center"></div>
         </div>
     </nav>
 
-    <main class="flex-grow">
+    <main class="flex-grow relative">
+        <div class="hero-glow"></div>
+
         <!-- HOME -->
-        <section id="view-home" class="view-section hero-bg min-h-[85vh] flex flex-col items-center justify-center text-center px-4">
-            <div class="animate-pulse mb-4 text-nexo-main font-bold tracking-tighter text-sm">PROJETO NEXOCLOUD ATIVO</div>
-            <h2 class="text-6xl md:text-8xl font-display font-black mb-6">NEXO <span class="text-nexo-main">ULTIMATE</span></h2>
-            <p class="text-slate-400 max-w-xl mb-10 text-lg">Seu progresso sincronizado em tempo real com o Google Firestore.</p>
+        <section id="view-home" class="view-section flex flex-col items-center justify-center min-h-[85vh] text-center px-4">
+            <div class="text-nexo-main font-bold text-[10px] tracking-[0.5em] mb-4 uppercase">System Online</div>
+            <h2 class="text-6xl md:text-8xl font-display font-black mb-6 tracking-tighter italic">NEXO<span class="text-nexo-main">.</span></h2>
+            <p class="text-slate-400 max-w-lg mb-10 text-lg font-light">A infraestrutura definitiva para Battle Royale com sincronização Cloud em tempo real.</p>
             <div class="flex gap-4">
-                <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-8 py-4 font-bold rounded hover:scale-105 transition shadow-lg shadow-amber-500/20">CRIAR CONTA GLOBAL</button>
+                <button onclick="router('register')" class="bg-nexo-main text-slate-900 px-10 py-4 font-bold rounded shadow-2xl shadow-amber-500/20 hover:scale-105 transition uppercase tracking-widest text-xs">Get Started</button>
             </div>
         </section>
 
-        <!-- REGISTER -->
-        <section id="view-register" class="view-section hidden-view min-h-screen flex items-center justify-center p-4">
-            <div class="glass-panel p-8 rounded-xl w-full max-w-md border-t-4 border-t-nexo-main">
+        <!-- REGISTER (EM ETAPAS) -->
+        <section id="view-register" class="view-section hidden-view min-h-[70vh] flex items-center justify-center p-4">
+            <div class="glass-panel p-8 rounded-2xl w-full max-w-sm border-t-2 border-nexo-main shadow-2xl">
+                
                 <div id="reg-step-1" class="reg-step">
-                    <h3 class="text-xl font-display font-bold mb-6">ETAPA 1: ACESSO</h3>
+                    <h3 class="text-lg font-display font-bold mb-6 text-center tracking-widest uppercase italic">Etapa 1: Acesso</h3>
                     <div class="space-y-4">
-                        <input type="email" id="reg-email" placeholder="E-mail" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main transition">
-                        <input type="password" id="reg-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main transition">
-                        <button onclick="regNext(2)" class="w-full bg-nexo-main text-slate-900 font-bold py-4 rounded hover:bg-white transition">PRÓXIMO</button>
+                        <input type="email" id="reg-email" placeholder="E-mail Corporativo" class="w-full bg-slate-900/50 p-3 rounded border border-slate-800 focus:border-nexo-main outline-none transition text-sm">
+                        <input type="password" id="reg-pass" placeholder="Senha de Segurança" class="w-full bg-slate-900/50 p-3 rounded border border-slate-800 focus:border-nexo-main outline-none transition text-sm">
+                        <button onclick="regNext(2)" class="w-full bg-nexo-main text-slate-900 font-bold py-4 rounded hover:bg-white transition uppercase tracking-widest text-xs">Continuar</button>
                     </div>
                 </div>
 
                 <div id="reg-step-2" class="reg-step hidden-view">
-                    <h3 class="text-xl font-display font-bold mb-6">ETAPA 2: IDENTIDADE</h3>
+                    <h3 class="text-lg font-display font-bold mb-6 text-center tracking-widest uppercase italic">Etapa 2: Identidade</h3>
                     <div class="space-y-4">
-                        <input type="text" id="reg-nick" placeholder="Nickname" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main transition">
-                        <button onclick="regNext(3)" class="w-full bg-nexo-main text-slate-900 font-bold py-4 rounded hover:bg-white transition">FINALIZAR CADASTRO</button>
-                        <button onclick="regNext(1)" class="w-full text-slate-400 text-sm">Voltar</button>
+                        <input type="text" id="reg-nick" placeholder="Nickname Operacional" class="w-full bg-slate-900/50 p-3 rounded border border-slate-800 focus:border-nexo-main outline-none transition text-sm uppercase">
+                        <button onclick="regNext(3)" class="w-full bg-nexo-main text-slate-900 font-bold py-4 rounded hover:bg-white transition uppercase tracking-widest text-xs">Finalizar Registro</button>
+                        <button onclick="regNext(1)" class="w-full text-slate-500 text-[10px] uppercase font-bold hover:text-white">Voltar</button>
                     </div>
                 </div>
 
                 <div id="reg-step-loading" class="reg-step hidden-view flex flex-col items-center py-10">
                     <div class="loader mb-4"></div>
-                    <p class="text-nexo-main font-bold animate-pulse">GRAVANDO NOS SERVIDORES GOOGLE...</p>
+                    <p class="text-nexo-main font-bold text-[10px] tracking-widest animate-pulse">SINCRONIZANDO COM CLOUD...</p>
                 </div>
+
+                <p class="text-center text-[10px] text-slate-500 mt-6 uppercase font-bold">Já possui acesso? <button onclick="router('login')" class="text-nexo-main hover:underline">Entrar</button></p>
             </div>
         </section>
 
         <!-- LOGIN -->
-        <section id="view-login" class="view-section hidden-view min-h-screen flex items-center justify-center p-4">
-            <div class="glass-panel p-8 rounded-xl w-full max-w-md border-t-4 border-t-white">
-                <h3 class="text-xl font-display font-bold mb-6 text-center tracking-widest">AUTENTICAÇÃO</h3>
+        <section id="view-login" class="view-section hidden-view min-h-[70vh] flex items-center justify-center p-4">
+            <div class="glass-panel p-8 rounded-2xl w-full max-w-sm border-t-2 border-white shadow-2xl">
+                <h3 class="text-lg font-display font-bold mb-6 text-center tracking-widest uppercase italic text-white">Autenticação</h3>
                 <div class="space-y-4">
-                    <input type="text" id="login-id" placeholder="E-mail ou SUN-ID" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main">
-                    <input type="password" id="login-pass" placeholder="Senha" class="w-full bg-slate-900 border border-slate-700 p-3 rounded outline-none focus:border-nexo-main">
-                    <p id="login-error" class="text-red-500 text-sm text-center"></p>
-                    <button onclick="submitLogin()" class="w-full bg-white text-slate-900 font-bold py-4 rounded hover:bg-nexo-main transition">ENTRAR</button>
+                    <input type="text" id="login-id" placeholder="ID (SUN-XXXX) ou Email" class="w-full bg-slate-900/50 p-3 rounded border border-slate-800 focus:border-white outline-none transition text-sm">
+                    <input type="password" id="login-pass" placeholder="Senha" class="w-full bg-slate-900/50 p-3 rounded border border-slate-800 focus:border-white outline-none transition text-sm">
+                    <p id="login-error" class="text-red-500 text-[10px] font-bold text-center uppercase"></p>
+                    <button onclick="submitLogin()" class="w-full bg-white text-slate-900 font-bold py-4 rounded hover:bg-nexo-main transition uppercase tracking-widest text-xs">Acessar Sistema</button>
+                    <p class="text-center text-[10px] text-slate-500 uppercase font-bold">Novo por aqui? <button onclick="router('register')" class="text-white hover:underline">Criar Conta</button></p>
                 </div>
             </div>
         </section>
 
         <!-- DASHBOARD -->
         <section id="view-dashboard" class="view-section hidden-view p-6">
-            <div class="max-w-4xl mx-auto bg-slate-900/50 backdrop-blur-xl rounded-2xl p-10 border border-slate-800 shadow-2xl">
-                <div class="flex flex-col md:flex-row justify-between items-center gap-6 mb-12">
-                    <div class="text-center md:text-left">
-                        <h2 id="dash-nick" class="text-5xl font-display font-black tracking-tight">Jogador</h2>
-                        <p id="dash-id" class="text-nexo-main font-mono text-lg mt-1">SUN-XXXX</p>
-                        <div id="dash-role-badge" class="mt-4"></div>
-                    </div>
-                    <button onclick="logout()" class="bg-red-500/10 text-red-500 border border-red-500/20 px-6 py-2 rounded-full font-bold hover:bg-red-500 hover:text-white transition">DESCONECTAR</button>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div class="bg-slate-950 p-8 rounded-2xl border border-slate-800 group hover:border-nexo-main transition">
-                        <p class="text-xs text-slate-500 mb-2 uppercase font-bold tracking-widest">Firestore Status</p>
-                        <div class="flex items-center gap-3">
-                            <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
-                            <p class="text-emerald-400 font-bold">CONECTADO À NUVEM</p>
+            <div class="max-w-4xl mx-auto">
+                <div class="glass-panel rounded-3xl p-10 relative overflow-hidden">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+                        <div>
+                            <div id="dash-role-badge" class="mb-4"></div>
+                            <h2 id="dash-nick" class="text-5xl font-display font-black tracking-tight uppercase italic">PLAYER</h2>
+                            <p id="dash-id" class="text-nexo-main font-mono text-sm tracking-widest mt-1">SUN-XXXX</p>
+                        </div>
+                        <div class="bg-slate-950/50 p-6 rounded-2xl border border-slate-800 text-right min-w-[180px]">
+                            <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Saldo Atual</p>
+                            <p class="text-3xl font-display text-nexo-main">₿ <span id="dash-coins">0</span></p>
                         </div>
                     </div>
-                    <div class="bg-slate-950 p-8 rounded-2xl border border-slate-800">
-                        <p class="text-xs text-slate-500 mb-2 uppercase font-bold tracking-widest">Conta Oficial</p>
-                        <p class="text-white font-medium">Membro da Comunidade Nexo</p>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-10">
+                        <div class="bg-slate-900/40 p-5 rounded-xl border border-slate-800 flex items-center gap-4">
+                            <div class="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+                                <i class="fa-solid fa-cloud"></i>
+                            </div>
+                            <div>
+                                <p class="text-xs text-slate-400 font-bold uppercase tracking-tighter">Conexão Cloud</p>
+                                <p class="text-sm font-bold text-emerald-400">ATIVO / SINCRONIZADO</p>
+                            </div>
+                        </div>
+                        <button onclick="logout()" class="p-5 rounded-xl border border-red-500/20 bg-red-500/5 text-red-500 font-bold uppercase text-xs hover:bg-red-500 hover:text-white transition">
+                            Desconectar da Sessão
+                        </button>
                     </div>
                 </div>
             </div>
@@ -409,57 +398,62 @@
             <div class="max-w-6xl mx-auto">
                 <div class="flex justify-between items-end mb-8">
                     <div>
-                        <p class="text-red-500 font-bold text-xs tracking-widest uppercase mb-1">Painel Administrativo</p>
-                        <h2 class="text-4xl font-display font-black italic">DATABASE [San]</h2>
+                        <p class="text-red-500 font-bold text-[10px] tracking-[0.4em] uppercase mb-1 italic">Master Database</p>
+                        <h2 class="text-4xl font-display font-black italic">SISTEMA <span class="text-red-600">[SAN]</span></h2>
                     </div>
-                    <button onclick="logout()" class="bg-red-600 px-6 py-2 rounded font-bold shadow-lg shadow-red-900/40 hover:scale-105 transition">SAIR DO MODO MESTRE</button>
+                    <button onclick="router('home')" class="bg-slate-800 px-6 py-2 rounded text-[10px] font-bold uppercase tracking-widest border border-slate-700 hover:border-white transition">Sair</button>
                 </div>
-                <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-2xl">
+                
+                <div class="glass-panel rounded-2xl overflow-hidden shadow-2xl">
                     <table class="w-full text-left">
-                        <thead class="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-tighter">
+                        <thead class="bg-slate-950/80 text-slate-500 text-[9px] uppercase tracking-widest font-bold">
                             <tr>
                                 <th class="p-5">Identificador</th>
-                                <th class="p-5">Nome</th>
+                                <th class="p-5">Nickname</th>
                                 <th class="p-5">Contato</th>
-                                <th class="p-5">Permissão</th>
-                                <th class="p-5">Controle</th>
+                                <th class="p-5">Cargo</th>
+                                <th class="p-5">Gerência</th>
                             </tr>
                         </thead>
-                        <tbody id="admin-table-body" class="divide-y divide-slate-800"></tbody>
+                        <tbody id="admin-table-body" class="divide-y divide-slate-800/50"></tbody>
                     </table>
                 </div>
             </div>
         </section>
     </main>
 
-    <!-- MODAL EDIT -->
-    <div id="modal-edit" class="fixed inset-0 modal-overlay hidden-view flex items-center justify-center p-4 z-[100]">
-        <div class="bg-slate-900 p-8 rounded-2xl w-full max-w-md border border-slate-700 shadow-3xl">
-            <h3 class="text-2xl font-display font-bold mb-8 border-b border-slate-800 pb-4">GESTÃO DE PERFIL</h3>
+    <!-- MODAL EDIT (DO SEU CÓDIGO ANTIGO) -->
+    <div id="modal-edit" class="fixed inset-0 bg-slate-950/90 backdrop-blur-sm hidden-view flex items-center justify-center p-4 z-[100]">
+        <div class="glass-panel p-8 rounded-2xl w-full max-w-md border border-slate-800 shadow-3xl">
+            <h3 class="text-xl font-display font-bold mb-8 border-b border-slate-800 pb-4 italic tracking-widest uppercase">Gestão de Perfil</h3>
             <div class="space-y-5">
                 <input type="hidden" id="edit-sunid">
                 <div>
-                    <label class="text-[10px] uppercase text-slate-500 font-bold mb-1 block">Nickname</label>
-                    <input type="text" id="edit-nick" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none">
+                    <label class="text-[9px] uppercase text-slate-500 font-bold mb-1 block tracking-widest">Nickname</label>
+                    <input type="text" id="edit-nick" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none text-sm uppercase">
                 </div>
                 <div>
-                    <label class="text-[10px] uppercase text-slate-500 font-bold mb-1 block">E-mail</label>
-                    <input type="email" id="edit-email" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none">
+                    <label class="text-[9px] uppercase text-slate-500 font-bold mb-1 block tracking-widest">E-mail</label>
+                    <input type="email" id="edit-email" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none text-sm">
                 </div>
                 <div>
-                    <label class="text-[10px] uppercase text-slate-500 font-bold mb-1 block">Cargo no Sistema</label>
-                    <select id="edit-role" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none">
+                    <label class="text-[9px] uppercase text-slate-500 font-bold mb-1 block tracking-widest">Cargo no Sistema</label>
+                    <select id="edit-role" class="w-full bg-slate-950 border border-slate-800 p-3 rounded text-white focus:border-nexo-main outline-none text-sm font-bold uppercase">
                         <option value="user">Jogador Comum</option>
                         <option value="admin">Administrador [Mod]</option>
                     </select>
                 </div>
                 <div class="flex gap-3 pt-6">
-                    <button onclick="document.getElementById('modal-edit').classList.add('hidden-view')" class="w-1/2 bg-slate-800 py-4 rounded font-bold hover:bg-slate-700 transition">CANCELAR</button>
-                    <button onclick="saveEdit()" class="w-1/2 bg-nexo-main text-slate-900 py-4 rounded font-bold hover:bg-white transition">ATUALIZAR</button>
+                    <button onclick="document.getElementById('modal-edit').classList.add('hidden-view')" class="w-1/2 bg-slate-800 py-4 rounded font-bold hover:bg-slate-700 transition text-[10px] uppercase">Cancelar</button>
+                    <button onclick="saveEdit()" class="w-1/2 bg-nexo-main text-slate-900 py-4 rounded font-bold hover:bg-white transition text-[10px] uppercase">Atualizar</button>
                 </div>
             </div>
         </div>
     </div>
+
+    <footer class="p-8 border-t border-slate-900 text-center text-slate-700 text-[9px] uppercase tracking-[0.3em] font-bold">
+        &copy; 2024 NexoBattle - Protocolo de Sincronização Cloud Ativo
+    </footer>
 
 </body>
 </html>
